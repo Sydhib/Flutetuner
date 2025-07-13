@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Flute Tuner</title>
+<style>
+  body { font-family: Arial, sans-serif; text-align: center; padding: 2rem; background: #f0f0f0; }
+  #note { font-size: 5rem; margin: 1rem; }
+  #status { font-size: 2rem; margin: 2rem; }
+  button { padding: 2rem 4rem; font-size: 1.5rem; }
+</style>
+</head>
+<body>
+
+<h1>Flute Tuner (Browser)</h1>
+<button id="startBtn">Start Tuner</button>
+<div id="note">--</div>
+<div id="freq">Frequency: -- Hz</div>
+<div id="status">Status: --</div>
+
+<script>
+const noteFrequencies = {
+  "C3": 130.81, "C#3": 138.59, "D3": 146.83, "D#3": 155.56, "E3": 164.81, "F3": 174.61,
+  "F#3": 185.00, "G3": 196.00, "G#3": 207.65, "A3": 220.00, "A#3": 233.08, "B3": 246.94,
+  "C4": 261.63, "C#4": 277.18, "D4": 293.66, "D#4": 311.13, "E4": 329.63, "F4": 349.23,
+  "F#4": 369.99, "G4": 392.00, "G#4": 415.30, "A4": 440.00, "A#4": 466.16, "B4": 493.88,
+  "C5": 523.25
+};
+
+function getClosestNote(freq) {
+  let minDiff = Infinity;
+  let closestNote = null;
+  for (const [note, noteFreq] of Object.entries(noteFrequencies)) {
+    const diff = Math.abs(freq - noteFreq);
+    if (diff < minDiff) {
+      minDiff = diff;
+      closestNote = note;
+    }
+  }
+  return closestNote;
+}
+
+function getStatus(dominantFreq, targetFreq) {
+  const tolerance = 5.0; // Hz
+  if (Math.abs(dominantFreq - targetFreq) <= tolerance) {
+    return "In tune ✅";
+  } else if (dominantFreq < targetFreq) {
+    return "Flat 🔻";
+  } else {
+    return "Sharp 🔺";
+  }
+}
+
+document.getElementById("startBtn").addEventListener("click", async () => {
+  const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+  const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  const source = audioContext.createMediaStreamSource(stream);
+  const analyser = audioContext.createAnalyser();
+  analyser.fftSize = 2048;
+  source.connect(analyser);
+
+  const bufferLength = analyser.frequencyBinCount;
+  const dataArray = new Uint8Array(bufferLength);
+
+  function autoCorrelate(buffer, sampleRate) {
+    // Basic auto-correlation algorithm for pitch detection
+    let SIZE = buffer.length;
+    let rms = 0;
+    for (let i = 0; i < SIZE; i++) {
+      let val = buffer[i] / 128 - 1;
+      rms += val * val;
+    }
+    rms = Math.sqrt(rms / SIZE);
+    if (rms < 0.01) // too quiet
+      return -1;
+
+    let r1 = 0, r2 = SIZE - 1, threshold = 0.2;
+    for (let i = 0; i < SIZE / 2; i++) {
+      if (Math.abs(buffer[i] / 128 - 1) < threshold) {
+        r1 = i;
+        break;
+      }
+    }
+    for (let i = 1; i < SIZE / 2; i++) {
+      if (Math.abs(buffer[SIZE - i] / 128 - 1) < threshold) {
+        r2 = SIZE - i;
+        break;
+      }
+    }
+
+    buffer = buffer.slice(r1, r2);
+    SIZE = buffer.length;
+
+    let c = new Array(SIZE).fill(0);
+    for (let i = 0; i < SIZE; i++) {
+      for (let j = 0; j < SIZE - i; j++) {
+        c[i] = c[i] + (buffer[j] / 128 - 1) * (buffer[j + i] / 128 - 1);
+      }
+    }
+
+    let d = 0; while (c[d] > c[d + 1]) d++;
+    let maxval = -1, maxpos = -1;
+    for (let i = d; i < SIZE; i++) {
+      if (c[i] > maxval) {
+        maxval = c[i];
+        maxpos = i;
+      }
+    }
+    let T0 = maxpos;
+
+    let x1 = c[T0 - 1], x2 = c[T0], x3 = c[T0 + 1];
+    let a = (x1 + x3 - 2 * x2) / 2;
+    let b = (x3 - x1) / 2;
+    if (a) T0 = T0 - b / (2 * a);
+
+    return sampleRate / T0;
+  }
+
+  function update() {
+    analyser.getByteTimeDomainData(dataArray);
+    const pitch = autoCorrelate(dataArray, audioContext.sampleRate);
+    if (pitch != -1) {
+      const note = getClosestNote(pitch);
+      const targetFreq = noteFrequencies[note];
+      const status = getStatus(pitch, targetFreq);
+
+      document.getElementById("note").textContent = note;
+      document.getElementById("freq").textContent = `Frequency: ${pitch.toFixed(2)} Hz`;
+      document.getElementById("status").textContent = `Status: ${status}`;
+    } else {
+      document.getElementById("note").textContent = "--";
+      document.getElementById("freq").textContent = "Frequency: -- Hz";
+      document.getElementById("status").textContent = "Status: --";
+    }
+    requestAnimationFrame(update);
+  }
+
+  update();
+});
+</script>
+
+</body>
+</html>
